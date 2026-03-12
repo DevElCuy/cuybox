@@ -255,12 +255,10 @@ resolve_target_details() {
 
     # Scan upward to find .cuyboxrc (cuybox project root)
     CONTAINER_ROOT="$ABSOLUTE_PATH"
-    CUYBOXRC_FOUND=0
     CURRENT="$ABSOLUTE_PATH"
     while [ "$CURRENT" != "/" ]; do
         if [ -f "$CURRENT/.cuyboxrc" ]; then
             CONTAINER_ROOT="$CURRENT"
-            CUYBOXRC_FOUND=1
             break
         fi
         CURRENT=$(dirname "$CURRENT")
