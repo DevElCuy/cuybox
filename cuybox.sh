@@ -284,6 +284,15 @@ resolve_target_details() {
     fi
     VALID_TAG_REGEX='^[A-Za-z0-9_.-]+$'
 
+    # If no custom tag and default tag is invalid, check state.json for a stored tag
+    if [ -z "$CUSTOM_TAG" ] && [[ ! $TAG =~ $VALID_TAG_REGEX ]] && [ -f "$CONFIG_FILE" ]; then
+        local peeked_tag
+        peeked_tag=$(jq -r --arg path "$CONTAINER_ROOT" '.[$path].tag // ""' "$CONFIG_FILE")
+        if [ -n "$peeked_tag" ]; then
+            TAG="$peeked_tag"
+        fi
+    fi
+
     if [[ ! $TAG =~ $VALID_TAG_REGEX ]]; then
         if [ -z "$CUSTOM_TAG" ]; then
             error_exit "Error: directory basename '$DEFAULT_TAG' is not a valid container tag. Provide a custom tag (second argument) matching [A-Za-z0-9_.-]." 1
