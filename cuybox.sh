@@ -225,7 +225,7 @@ parse_arguments() {
             -*)
                 DOCKER_OPTS+=("$arg")
                 case "$arg" in
-                    -e|-v|-p|-w|-u|-h|--env|--volume|--publish|--workdir|--user|--hostname|--name|--network|--add-host|--device|--label|--mount|--entrypoint)
+                    -e|-v|-p|-w|-u|-h|--env|--volume|--publish|--workdir|--user|--hostname|--name|--network|--add-host|--device|--label|--mount|--entrypoint|--gpus)
                         EXPECT_DOCKER_VALUE=1
                         ;;
                 esac
