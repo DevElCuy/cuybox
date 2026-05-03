@@ -12,6 +12,7 @@ The `cuybox.sh` script handles building the necessary Docker image, as well as c
 - **Path Tracking**: A config file (`$XDG_CONFIG_HOME/cuybox/state.json`, defaulting to `~/.config/cuybox/state.json`) keeps a record of paths and their sandboxes to prevent collisions and manage indices.
 - **Pre-configured Environment**: The Docker image comes with `nvm` and the latest version of `Node.js v22` ready to use.
 - **Graceful Lifecycle**: Containers run under `tini` with an idle process so they stop quickly and cleanly even after long sessions.
+- **Custom Attach Program**: Sandboxes attach with `byobu` by default, with `--program` available for alternatives such as `bash`.
 - **Flexibility**: Allows passing custom options directly to the `docker run` command (e.g., to delete a container on exit with `--rm`).
 - **Ephemeral Port Forwarding**: Run `--forward-port PORT`, `HOST_PORT:CONTAINER_PORT` (default bind `0.0.0.0`), or `BIND:HOST_PORT:CONTAINER_PORT`—and repeat the flag as needed—to spin up standalone `socat` bridges to a running sandbox until `Ctrl+C`.
 - **Discoverable Container IP**: The script prints the container IP on launch, so you can use it directly without running `--set-hostname` when you just need the address.
@@ -51,7 +52,13 @@ The `cuybox.sh` script must be executable (`chmod +x cuybox.sh`).
     ./cuybox.sh /path/to/your/project --setup-user
     ```
 
-5.  **Pass additional parameters to Docker**:
+5.  **Attach with a custom program**:
+    By default, `cuybox.sh` attaches with `byobu`. Use `--program` to run another installed program directly, such as `bash`.
+    ```bash
+    ./cuybox.sh --program bash /path/to/your/project
+    ```
+
+6.  **Pass additional parameters to Docker**:
     To create a container that gets deleted upon exit (non-persistent behavior), use the `--rm` flag.
     ```bash
     ./cuybox.sh /path/to/your/project --rm
@@ -61,7 +68,7 @@ The `cuybox.sh` script must be executable (`chmod +x cuybox.sh`).
     ./cuybox.sh . -e MY_VARIABLE=my_value
     ```
 
-6.  **Forward a port from an already-running sandbox (requires `socat`)**:
+7.  **Forward a port from an already-running sandbox (requires `socat`)**:
     First, start the sandbox normally so the container is running. In another terminal, run the forwarding command and leave it running; stop it at any time with `Ctrl+C`. A lone `PORT` maps `0.0.0.0:PORT -> container:PORT`, `HOST_PORT:CONTAINER_PORT` lets you choose different ports, and `BIND:HOST_PORT:CONTAINER_PORT` lets you constrain the host interface. You can repeat the flag to forward multiple ports, and the script will refuse to run if the container is stopped.
     ```bash
     ./cuybox.sh --forward-port 8080 /path/to/your/project
@@ -69,7 +76,7 @@ The `cuybox.sh` script must be executable (`chmod +x cuybox.sh`).
     ./cuybox.sh --forward-port 127.0.0.1:9000:9000 /path/to/your/project
     ```
 
-7.  **Exit the sandbox**:
+8.  **Exit the sandbox**:
     Simply type `exit` or press `Ctrl+D`.
 
 ## How It Works
@@ -81,7 +88,7 @@ The `cuybox.sh` script must be executable (`chmod +x cuybox.sh`).
     3.  Queries the config file in `$XDG_CONFIG_HOME/cuybox/state.json` (or `~/.config/cuybox/state.json`) to determine the container's index, avoiding collisions.
     4.  Generates a unique and persistent name for the container.
     5.  Checks if the `develcuy/cuybox:latest` Docker image exists and, if not, builds it.
-    6.  Creates the container on first run, runs the host-user setup once (or when `--setup-user` is passed), and then executes an interactive shell inside the running container.
+    6.  Creates the container on first run, runs the host-user setup once (or when `--setup-user` is passed), and then executes the attach program (`byobu` by default) inside the running container.
 
 ## Customization
 

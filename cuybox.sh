@@ -11,6 +11,8 @@ TAG=""
 CONTAINER_NAME=""
 ACTUAL_CONTAINER_NAME=""
 CUSTOM_TAG_SET=0
+EXEC_COMMAND=(byobu)
+EXEC_PROGRAM_SET=0
 SET_HOSTNAME=""
 PORT_FORWARD_SPECS=()
 PORT_FORWARD_PIDS=()
@@ -28,6 +30,7 @@ ARGUMENTS:
 OPTIONS:
   --setup-user        Force re-run of user setup in the container
   --root              Run shell as root instead of host user
+  --program PROGRAM   Program to run when attaching to the sandbox (default: byobu)
   --set-hostname NAME Map hostname to container IP in /etc/hosts (requires sudo, exits without entering sandbox)
   --forward-port PORT|HOST_PORT:CONTAINER_PORT|BIND:HOST_PORT:CONTAINER_PORT
                        Run a standalone host->container port proxy (defaults to binding 0.0.0.0 and same host/container port when only PORT is given; repeat flag to add more mappings; requires running container and socat; Ctrl-C to stop)
@@ -49,6 +52,9 @@ EXAMPLES:
 
   # Run as root user
   cuybox.sh --root
+
+  # Attach with bash instead of byobu
+  cuybox.sh --program bash /path/to/project
 
   # Pass Docker port mapping
   cuybox.sh -p 8080:8080 /path/to/project
@@ -89,6 +95,16 @@ error_exit() {
         echo "Run 'cuybox.sh --help' for usage information." >&2
     fi
     exit 1
+}
+
+set_exec_program() {
+    local program="$1"
+    if [ -z "$program" ]; then
+        error_exit "Error: --program requires a non-empty program name."
+    fi
+
+    EXEC_COMMAND=("$program")
+    EXEC_PROGRAM_SET=1
 }
 
 ensure_dependencies() {
@@ -161,10 +177,19 @@ parse_arguments() {
     EXPECT_DOCKER_VALUE=0
     EXPECT_HOSTNAME_VALUE=0
     EXPECT_FORWARD_PORT_VALUE=0
+    EXPECT_PROGRAM_VALUE=0
     FORCE_USER_SETUP=0
+    EXEC_COMMAND=(byobu)
+    EXEC_PROGRAM_SET=0
     AFTER_DASH_DASH=0
 
     for arg in "$@"; do
+        if [ "$EXPECT_PROGRAM_VALUE" -eq 1 ]; then
+            set_exec_program "$arg"
+            EXPECT_PROGRAM_VALUE=0
+            continue
+        fi
+
         if [ "$EXPECT_HOSTNAME_VALUE" -eq 1 ]; then
             SET_HOSTNAME="$arg"
             EXPECT_HOSTNAME_VALUE=0
@@ -195,6 +220,16 @@ parse_arguments() {
 
         if [ "$arg" = "--root" ]; then
             RUN_AS_ROOT=1
+            continue
+        fi
+
+        if [ "$arg" = "--program" ]; then
+            EXPECT_PROGRAM_VALUE=1
+            continue
+        fi
+
+        if [[ "$arg" == --program=* ]]; then
+            set_exec_program "${arg#*=}"
             continue
         fi
 
@@ -242,6 +277,10 @@ parse_arguments() {
 
     if [ "$EXPECT_FORWARD_PORT_VALUE" -eq 1 ]; then
         error_exit "Error: --forward-port requires a mapping value."
+    fi
+
+    if [ "$EXPECT_PROGRAM_VALUE" -eq 1 ]; then
+        error_exit "Error: --program requires a program argument."
     fi
 }
 
@@ -701,7 +740,7 @@ stage_run() {
     exec_args+=(--env LC_ALL="${LC_ALL:-C.UTF-8}")
     exec_args+=(--env LANG="${LANG:-C.UTF-8}")
     exec_args+=(--env LC_CTYPE="${LC_CTYPE:-C.UTF-8}")
-    exec_args+=("$CONTAINER_ID" bash)
+    exec_args+=("$CONTAINER_ID" "${EXEC_COMMAND[@]}")
     "${exec_args[@]}"
     return $?
 }
@@ -726,6 +765,9 @@ main() {
         fi
         if [ "$RUN_AS_ROOT" -eq 1 ]; then
             error_exit "Error: --root cannot be combined with --forward-port."
+        fi
+        if [ "$EXEC_PROGRAM_SET" -eq 1 ]; then
+            error_exit "Error: --program cannot be combined with --forward-port."
         fi
         if [ -n "$SET_HOSTNAME" ]; then
             error_exit "Error: --set-hostname cannot be combined with --forward-port."

@@ -3,7 +3,7 @@ FROM phusion/baseimage:noble-1.0.2
 # Install dependencies for nvm and extra tools
 RUN apt-get update && apt-get install -y \
     curl build-essential ca-certificates \
-    vim git less locales jq iproute2 && \
+    vim git less locales jq iproute2 byobu && \
     sed -i '/en_US.UTF-8/s/^# //g' /etc/locale.gen && \
     locale-gen
 ENV LANG=en_US.UTF-8
