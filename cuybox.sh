@@ -14,12 +14,20 @@ CUSTOM_TAG_SET=0
 EXEC_COMMAND=(byobu)
 EXEC_PROGRAM_SET=0
 SET_HOSTNAME=""
+STATE_ACTION=""
+STATE_IDENTIFIER=""
 PORT_FORWARD_SPECS=()
 PORT_FORWARD_PIDS=()
+COLOR_GREEN=""
+COLOR_RED=""
+COLOR_RESET=""
 
 show_help() {
     cat << 'EOF'
 Usage: cuybox.sh [OPTIONS] [TARGET_DIR] [CUSTOM_TAG]
+       cuybox.sh --list
+       cuybox.sh --show ID
+       cuybox.sh --forget ID
 
 Create and attach to a persistent Docker-based sandbox environment for a directory.
 
@@ -34,6 +42,10 @@ OPTIONS:
   --set-hostname NAME Map hostname to container IP in /etc/hosts (requires sudo, exits without entering sandbox)
   --forward-port PORT|HOST_PORT:CONTAINER_PORT|BIND:HOST_PORT:CONTAINER_PORT
                        Run a standalone host->container port proxy (defaults to binding 0.0.0.0 and same host/container port when only PORT is given; repeat flag to add more mappings; requires running container and socat; Ctrl-C to stop)
+  --list              List sandbox entries recorded in state.json
+  --show ID           Show details for one state entry from --list
+  --forget ID         Delete one state entry from state.json; does not remove the Docker container
+  --delete ID         Alias for --forget
   -h, --help          Show this help message and exit
 
 DOCKER OPTIONS:
@@ -74,6 +86,11 @@ EXAMPLES:
   # Forward 127.0.0.1:9000 to container port 9000
   cuybox.sh --forward-port 127.0.0.1:9000:9000 /path/to/project
 
+  # List, inspect, and delete state entries
+  cuybox.sh --list
+  cuybox.sh --show my-project-abcd-0
+  cuybox.sh --forget my-project-abcd-0
+
 CONTAINER NAMING:
   Containers are named: <tag>-<hash>-<index>
   - tag: Directory basename or CUSTOM_TAG
@@ -107,9 +124,13 @@ set_exec_program() {
     EXEC_PROGRAM_SET=1
 }
 
-ensure_dependencies() {
+ensure_state_dependencies() {
     if ! command -v jq &> /dev/null; then error_exit "Error: jq is not installed."; fi
     if ! command -v realpath &> /dev/null; then error_exit "Error: realpath is not installed."; fi
+}
+
+ensure_dependencies() {
+    ensure_state_dependencies
     if ! command -v crc32 &> /dev/null; then error_exit "Error: crc32 is not installed."; fi
 }
 
@@ -121,6 +142,291 @@ initialize_config_file() {
     fi
     mkdir -p "$CONFIG_DIR"
     [ -f "$CONFIG_FILE" ] || echo "{}" > "$CONFIG_FILE"
+}
+
+initialize_colors() {
+    COLOR_GREEN=""
+    COLOR_RED=""
+    COLOR_RESET=""
+
+    if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
+        COLOR_GREEN=$'\033[32m'
+        COLOR_RED=$'\033[31m'
+        COLOR_RESET=$'\033[0m'
+    fi
+}
+
+format_docker_status() {
+    local status="$1"
+    printf '%s%s%s\n' "$COLOR_RED" "$status" "$COLOR_RESET"
+}
+
+set_state_action() {
+    local action="$1"
+    local identifier="${2:-}"
+
+    if [ -n "$STATE_ACTION" ]; then
+        error_exit "Error: only one state management command can be used at a time."
+    fi
+
+    STATE_ACTION="$action"
+    STATE_IDENTIFIER="$identifier"
+}
+
+current_directory_path() {
+    local current_path
+    if current_path=$(realpath . 2>/dev/null); then
+        printf '%s\n' "$current_path"
+        return 0
+    fi
+
+    pwd -P
+}
+
+state_entry_id_from_values() {
+    local tag="$1"
+    local hash="$2"
+    local index="$3"
+    local container_id="$4"
+    local path="$5"
+
+    if [ -n "$tag" ] && [ -n "$hash" ] && [ -n "$index" ] && [ "$index" != "-1" ]; then
+        printf '%s-%s-%s\n' "$tag" "$hash" "$index"
+    elif [ -n "$container_id" ]; then
+        printf '%s\n' "$container_id"
+    else
+        printf '%s\n' "$path"
+    fi
+}
+
+state_container_name_from_values() {
+    local tag="$1"
+    local hash="$2"
+    local index="$3"
+
+    if [ -n "$tag" ] && [ -n "$hash" ] && [ -n "$index" ] && [ "$index" != "-1" ]; then
+        printf '%s-%s-%s\n' "$tag" "$hash" "$index"
+    else
+        printf '(unknown)\n'
+    fi
+}
+
+state_entry_id_for_path() {
+    local path="$1"
+    local tag hash index container_id
+
+    tag=$(jq -r --arg path "$path" '.[$path].tag // ""' "$CONFIG_FILE")
+    hash=$(jq -r --arg path "$path" '.[$path].hash // ""' "$CONFIG_FILE")
+    index=$(jq -r --arg path "$path" '.[$path].index // -1' "$CONFIG_FILE")
+    container_id=$(jq -r --arg path "$path" '.[$path].container_id // ""' "$CONFIG_FILE")
+
+    state_entry_id_from_values "$tag" "$hash" "$index" "$container_id" "$path"
+}
+
+find_state_entry_paths() {
+    local identifier="$1"
+
+    jq -r --arg id "$identifier" '
+      def state_id:
+        if ((.value.tag // "") != "" and (.value.hash // "") != "" and (.value.index // -1) != -1)
+        then "\(.value.tag)-\(.value.hash)-\(.value.index)"
+        else ""
+        end;
+
+      to_entries[]
+      | (.value.container_id // "") as $container_id
+      | state_id as $state_id
+      | select(
+          $state_id == $id
+          or .key == $id
+          or ($container_id != "" and $container_id == $id)
+          or ($container_id != "" and ($id | length) >= 12 and ($container_id | startswith($id)))
+        )
+      | .key
+    ' "$CONFIG_FILE"
+}
+
+resolve_state_entry_path() {
+    local identifier="$1"
+    local matches=()
+    local path matched_paths
+
+    if [ -z "$identifier" ]; then
+        error_exit "Error: state entry identifier cannot be empty."
+    fi
+
+    if ! matched_paths=$(find_state_entry_paths "$identifier"); then
+        error_exit "Error: failed to read $CONFIG_FILE."
+    fi
+
+    while IFS= read -r path; do
+        [ -n "$path" ] && matches+=("$path")
+    done <<< "$matched_paths"
+
+    if [ "${#matches[@]}" -eq 0 ]; then
+        error_exit "Error: no state entry found for identifier '$identifier'. Use --list to see valid IDs."
+    fi
+
+    if [ "${#matches[@]}" -gt 1 ]; then
+        echo "Error: identifier '$identifier' matches multiple state entries:" >&2
+        for path in "${matches[@]}"; do
+            echo "  $(state_entry_id_for_path "$path")  $path" >&2
+        done
+        exit 1
+    fi
+
+    printf '%s\n' "${matches[0]}"
+}
+
+list_state_entries() {
+    local count current_path
+    if ! count=$(jq -r 'length' "$CONFIG_FILE"); then
+        error_exit "Error: failed to read $CONFIG_FILE."
+    fi
+    current_path=$(current_directory_path)
+
+    if [ "$count" -eq 0 ]; then
+        echo "No cuybox sandboxes are recorded in $CONFIG_FILE."
+        return 0
+    fi
+
+    printf '%-32s %-14s %s\n' "ID" "CONTAINER ID" "PATH"
+    jq -r '
+      to_entries
+      | sort_by(.key)
+      | .[]
+      | [
+          .key,
+          (.value.tag // ""),
+          (.value.hash // ""),
+          ((.value.index // -1) | tostring),
+          (.value.container_id // "")
+        ]
+      | @tsv
+    ' "$CONFIG_FILE" | while IFS=$'\t' read -r path tag hash index container_id; do
+        local id short_container_id marker
+        id=$(state_entry_id_from_values "$tag" "$hash" "$index" "$container_id" "$path")
+        short_container_id="-"
+        if [ -n "$container_id" ]; then
+            short_container_id="${container_id:0:12}"
+        fi
+
+        marker=""
+        if [ "$path" = "$current_path" ]; then
+            marker=" ${COLOR_GREEN}(current folder)${COLOR_RESET}"
+        fi
+
+        printf '%-32s %-14s %s%s\n' "$id" "$short_container_id" "$path" "$marker"
+    done
+}
+
+show_state_entry() {
+    local identifier="$1"
+    local path current_path tag hash index container_id state_id container_name
+    local docker_info docker_name docker_status docker_running
+
+    if ! path=$(resolve_state_entry_path "$identifier"); then
+        exit 1
+    fi
+    current_path=$(current_directory_path)
+    tag=$(jq -r --arg path "$path" '.[$path].tag // ""' "$CONFIG_FILE")
+    hash=$(jq -r --arg path "$path" '.[$path].hash // ""' "$CONFIG_FILE")
+    index=$(jq -r --arg path "$path" '.[$path].index // -1' "$CONFIG_FILE")
+    container_id=$(jq -r --arg path "$path" '.[$path].container_id // ""' "$CONFIG_FILE")
+    state_id=$(state_entry_id_from_values "$tag" "$hash" "$index" "$container_id" "$path")
+    container_name=$(state_container_name_from_values "$tag" "$hash" "$index")
+
+    echo "ID: $state_id"
+    echo "Path: $path"
+    if [ "$path" = "$current_path" ]; then
+        echo "Current folder: yes"
+    else
+        echo "Current folder: no"
+    fi
+    if [ -d "$path" ]; then
+        echo "Path exists: yes"
+    else
+        echo "Path exists: no"
+    fi
+    echo "Tag: ${tag:-"(none)"}"
+    echo "Hash: ${hash:-"(none)"}"
+    echo "Index: $index"
+    echo "Container name: $container_name"
+    echo "Container ID: ${container_id:-"(none)"}"
+
+    if [ -z "$container_id" ]; then
+        echo "Docker status: $(format_docker_status "no container ID recorded")"
+        return 0
+    fi
+
+    if ! command -v docker &> /dev/null; then
+        echo "Docker status: $(format_docker_status "unavailable (docker command not found)")"
+        return 0
+    fi
+
+    if docker_info=$(docker inspect --format '{{ .Name }}	{{ .State.Status }}	{{ .State.Running }}' "$container_id" 2>/dev/null); then
+        IFS=$'\t' read -r docker_name docker_status docker_running <<< "$docker_info"
+        echo "Docker name: ${docker_name#/}"
+        echo "Docker status: $(format_docker_status "$docker_status")"
+        echo "Docker running: $docker_running"
+    else
+        echo "Docker status: $(format_docker_status "container not found")"
+    fi
+}
+
+delete_state_entry() {
+    local identifier="$1"
+    local path state_id container_id
+
+    if ! path=$(resolve_state_entry_path "$identifier"); then
+        exit 1
+    fi
+    state_id=$(state_entry_id_for_path "$path")
+    container_id=$(jq -r --arg path "$path" '.[$path].container_id // ""' "$CONFIG_FILE")
+
+    if ! jq --arg path "$path" 'del(.[$path])' "$CONFIG_FILE" > "$CONFIG_FILE.tmp"; then
+        error_exit "Error: failed to delete state entry '$state_id'."
+    fi
+    if ! mv "$CONFIG_FILE.tmp" "$CONFIG_FILE"; then
+        error_exit "Error: failed to persist state after deleting '$state_id'."
+    fi
+
+    echo "Deleted state entry: $state_id"
+    echo "Path: $path"
+    if [ -n "$container_id" ]; then
+        echo "Docker container was not removed: $container_id"
+    else
+        echo "No Docker container ID was recorded."
+    fi
+}
+
+validate_state_command_context() {
+    if [ "${#SCRIPT_ARGS[@]}" -gt 0 ] || [ "${#DOCKER_OPTS[@]}" -gt 0 ]; then
+        error_exit "Error: state management commands cannot be combined with target directories, custom tags, or Docker options."
+    fi
+
+    if [ "$FORCE_USER_SETUP" -eq 1 ] || [ "$RUN_AS_ROOT" -eq 1 ] || [ "$EXEC_PROGRAM_SET" -eq 1 ] || [ -n "$SET_HOSTNAME" ] || [ "${#PORT_FORWARD_SPECS[@]}" -gt 0 ]; then
+        error_exit "Error: state management commands cannot be combined with sandbox runtime options."
+    fi
+}
+
+run_state_action() {
+    validate_state_command_context
+
+    case "$STATE_ACTION" in
+        list)
+            list_state_entries
+            ;;
+        show)
+            show_state_entry "$STATE_IDENTIFIER"
+            ;;
+        delete)
+            delete_state_entry "$STATE_IDENTIFIER"
+            ;;
+        *)
+            error_exit "Error: unknown state management command '$STATE_ACTION'."
+            ;;
+    esac
 }
 
 add_port_forward_spec() {
@@ -178,12 +484,27 @@ parse_arguments() {
     EXPECT_HOSTNAME_VALUE=0
     EXPECT_FORWARD_PORT_VALUE=0
     EXPECT_PROGRAM_VALUE=0
+    EXPECT_STATE_IDENTIFIER_FOR=""
     FORCE_USER_SETUP=0
+    RUN_AS_ROOT=0
     EXEC_COMMAND=(byobu)
     EXEC_PROGRAM_SET=0
+    SET_HOSTNAME=""
+    STATE_ACTION=""
+    STATE_IDENTIFIER=""
+    PORT_FORWARD_SPECS=()
     AFTER_DASH_DASH=0
 
     for arg in "$@"; do
+        if [ -n "$EXPECT_STATE_IDENTIFIER_FOR" ]; then
+            if [ -z "$arg" ]; then
+                error_exit "Error: --$EXPECT_STATE_IDENTIFIER_FOR requires a non-empty identifier."
+            fi
+            STATE_IDENTIFIER="$arg"
+            EXPECT_STATE_IDENTIFIER_FOR=""
+            continue
+        fi
+
         if [ "$EXPECT_PROGRAM_VALUE" -eq 1 ]; then
             set_exec_program "$arg"
             EXPECT_PROGRAM_VALUE=0
@@ -211,6 +532,53 @@ parse_arguments() {
         if [ "$arg" = "-h" ] || [ "$arg" = "--help" ]; then
             show_help
             exit 0
+        fi
+
+        if [ "$arg" = "--list" ]; then
+            set_state_action "list"
+            continue
+        fi
+
+        if [ "$arg" = "--show" ]; then
+            set_state_action "show"
+            EXPECT_STATE_IDENTIFIER_FOR="show"
+            continue
+        fi
+
+        if [[ "$arg" == --show=* ]]; then
+            set_state_action "show" "${arg#*=}"
+            if [ -z "$STATE_IDENTIFIER" ]; then
+                error_exit "Error: --show requires a non-empty identifier."
+            fi
+            continue
+        fi
+
+        if [ "$arg" = "--forget" ]; then
+            set_state_action "delete"
+            EXPECT_STATE_IDENTIFIER_FOR="forget"
+            continue
+        fi
+
+        if [[ "$arg" == --forget=* ]]; then
+            set_state_action "delete" "${arg#*=}"
+            if [ -z "$STATE_IDENTIFIER" ]; then
+                error_exit "Error: --forget requires a non-empty identifier."
+            fi
+            continue
+        fi
+
+        if [ "$arg" = "--delete" ]; then
+            set_state_action "delete"
+            EXPECT_STATE_IDENTIFIER_FOR="delete"
+            continue
+        fi
+
+        if [[ "$arg" == --delete=* ]]; then
+            set_state_action "delete" "${arg#*=}"
+            if [ -z "$STATE_IDENTIFIER" ]; then
+                error_exit "Error: --delete requires a non-empty identifier."
+            fi
+            continue
         fi
 
         if [ "$arg" = "--setup-user" ]; then
@@ -281,6 +649,10 @@ parse_arguments() {
 
     if [ "$EXPECT_PROGRAM_VALUE" -eq 1 ]; then
         error_exit "Error: --program requires a program argument."
+    fi
+
+    if [ -n "$EXPECT_STATE_IDENTIFIER_FOR" ]; then
+        error_exit "Error: --$EXPECT_STATE_IDENTIFIER_FOR requires an identifier argument."
     fi
 }
 
@@ -746,9 +1118,18 @@ stage_run() {
 }
 
 main() {
+    parse_arguments "$@"
+
+    if [ -n "$STATE_ACTION" ]; then
+        ensure_state_dependencies
+        initialize_config_file
+        initialize_colors
+        run_state_action
+        exit $?
+    fi
+
     ensure_dependencies
     initialize_config_file
-    parse_arguments "$@"
     resolve_target_details
     if ! load_or_create_index; then
         exit 1
