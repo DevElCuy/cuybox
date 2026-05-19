@@ -16,7 +16,19 @@ RUN cat <<'EOF' >> /home/ubuntu/.bashrc
 if [[ $- == *i* ]] && [ -n "${CLI_SANDBOX_HOSTNAME-}" ] && [[ "$PS1" == *\\h* ]]; then
     PS1="${PS1//\\h/${CLI_SANDBOX_HOSTNAME}}"
 fi
+
+# Disable mouse capture in opencode
+export OPENCODE_DISABLE_MOUSE=1
 EOF
+
+# Configure opencode plugins
+RUN mkdir -p /home/ubuntu/.config/opencode && cat <<'EOF' > /home/ubuntu/.config/opencode/opencode.json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugin": ["opencode-gemini-auth@latest"]
+}
+EOF
+RUN chown -R ubuntu:ubuntu /home/ubuntu/.config
 
 COPY setup-host-user.sh /usr/local/bin/setup-host-user.sh
 RUN chmod 755 /usr/local/bin/setup-host-user.sh
