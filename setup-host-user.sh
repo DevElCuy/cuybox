@@ -42,6 +42,18 @@ echo "Installing Node.js $NODE_VERSION for user $TARGET_USER..."
 /sbin/setuser "$TARGET_USER" bash -l -c "export NVM_DIR=\"$NVM_DIR\" && [ -s \"$NVM_DIR/nvm.sh\" ] && \\. \"$NVM_DIR/nvm.sh\" && nvm install $NODE_VERSION && nvm alias default $NODE_VERSION"
 echo "Node.js $NODE_VERSION installed and set as default."
 
+# Install CLI tools globally via npm (idempotent: skip any already present)
+echo "Ensuring CLI tools (gemini, codex, claude, opencode) are installed for user $TARGET_USER..."
+/sbin/setuser "$TARGET_USER" bash -l -c "
+    export NVM_DIR=\"$NVM_DIR\"
+    \\. \"\$NVM_DIR/nvm.sh\"
+    command -v gemini   >/dev/null 2>&1 || npm install -g @google/gemini-cli
+    command -v codex    >/dev/null 2>&1 || npm install -g @openai/codex
+    command -v claude   >/dev/null 2>&1 || npm install -g @anthropic-ai/claude-code
+    command -v opencode >/dev/null 2>&1 || npm install -g opencode-ai
+"
+echo "CLI tools ready."
+
 # Add host.docker.internal to /etc/hosts if not already present
 GATEWAY_IP=$(ip route | awk '/default/ {print $3}')
 if ! grep -q "host.docker.internal" /etc/hosts; then
