@@ -21,15 +21,6 @@ fi
 export OPENCODE_DISABLE_MOUSE=1
 EOF
 
-# Configure opencode plugins
-RUN mkdir -p /home/ubuntu/.config/opencode && cat <<'EOF' > /home/ubuntu/.config/opencode/opencode.json
-{
-  "$schema": "https://opencode.ai/config.json",
-  "plugin": ["opencode-gemini-auth@latest"]
-}
-EOF
-RUN chown -R ubuntu:ubuntu /home/ubuntu/.config
-
 COPY setup-host-user.sh /usr/local/bin/setup-host-user.sh
 RUN chmod 755 /usr/local/bin/setup-host-user.sh
 
