@@ -104,12 +104,15 @@ The `cuybox.sh` script must be executable (`chmod +x cuybox.sh`).
     cuybox-install list skills
     cuybox-install install NAME
     cuybox-install install codebase-memory-mcp
+    cuybox-install install opencode-attention
     ```
     Each item has its own installer script and is installed only when requested.
     Re-running an installer updates or repairs that item. The
     `codebase-memory-mcp` installer installs the npm package for the current user
     and runs its agent configuration command; restart active coding-agent
-    sessions afterward.
+    sessions afterward. The `opencode-attention` installer fetches the plugin
+    from `DevElCuy/skills`, installs its compiled distribution for the current
+    user, and adds its entry point to the global OpenCode configuration.
 
 ## How It Works
 
