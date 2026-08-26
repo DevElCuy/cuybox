@@ -22,6 +22,7 @@ export OPENCODE_DISABLE_MOUSE=1
 EOF
 
 COPY setup-host-user.sh /usr/local/bin/setup-host-user.sh
+COPY opencode-defaults.json /usr/local/share/cuybox/opencode-defaults.json
 COPY cuybox-install /usr/local/bin/cuybox-install
 COPY plugins/ /usr/local/lib/cuybox/plugins/
 COPY skills/ /usr/local/lib/cuybox/skills/

@@ -11,6 +11,7 @@ The `cuybox.sh` script handles building the necessary Docker image, as well as c
 - **Unique & Predictable Naming**: Each container's name is generated from a tag (the folder's name or a custom one), a 4-character hash of the path, and an index to resolve collisions (`{tag}-{hash}-{index}`).
 - **Path Tracking**: A config file (`$XDG_CONFIG_HOME/cuybox/state.json`, defaulting to `~/.config/cuybox/state.json`) keeps a record of paths and their sandboxes to prevent collisions and manage indices.
 - **Pre-configured Environment**: The Docker image comes with `nvm` and the latest version of `Node.js v22` ready to use.
+- **Quiet OpenCode Defaults**: OpenCode ignores common dependency trees, build outputs, caches, logs, binaries, and lockfiles from many language ecosystems when watching for filesystem changes.
 - **Optional Tool Catalog**: Discover and explicitly install optional plugins and skills inside a sandbox with `cuybox-install`; optional tools are not baked into every container.
 - **Graceful Lifecycle**: Containers run under `tini` with an idle process so they stop quickly and cleanly even after long sessions.
 - **Custom Attach Program**: Sandboxes attach with `byobu` by default, with `--program` available for alternatives such as `bash`.
@@ -117,6 +118,7 @@ The `cuybox.sh` script must be executable (`chmod +x cuybox.sh`).
 ## How It Works
 
 - **Dockerfile**: Defines an Ubuntu-based environment with `nvm`, Node.js v22, and `tini` as PID 1. The container idles with `tail -f /dev/null`, so stop and start operations remain fast.
+- **opencode-defaults.json**: Supplies language-agnostic `watcher.ignore` defaults for JavaScript/TypeScript, Java, C/C++, Rust, Go, Erlang/Elixir, Python, .NET, PHP, Ruby, Swift, Dart, Android, and common tooling. Host-user setup merges these defaults into the user's global OpenCode config without removing existing settings.
 - **cuybox.sh**: This is the orchestrator that:
     1.  Parses arguments to separate script inputs from Docker options.
     2.  Calculates the absolute path of the directory and generates a 4-character `crc32` hash.

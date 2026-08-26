@@ -53,6 +53,44 @@ echo "Ensuring CLI tools (codex, claude, opencode) are installed for user $TARGE
 "
 echo "CLI tools ready."
 
+# Install broad, language-agnostic OpenCode watcher defaults without replacing
+# any user settings or ignore patterns already present in opencode.json.
+OPENCODE_DEFAULTS=/usr/local/share/cuybox/opencode-defaults.json
+TARGET_HOME=$(getent passwd "$TARGET_USER" | cut -d: -f6)
+TARGET_CONFIG_HOME="${XDG_CONFIG_HOME:-$TARGET_HOME/.config}"
+OPENCODE_CONFIG_DIR="$TARGET_CONFIG_HOME/opencode"
+OPENCODE_CONFIG_FILE="$OPENCODE_CONFIG_DIR/opencode.json"
+OPENCODE_CONFIG_TEMP=""
+
+/sbin/setuser "$TARGET_USER" mkdir -p "$OPENCODE_CONFIG_DIR"
+
+if [ ! -f "$OPENCODE_CONFIG_FILE" ]; then
+    install -o "$TARGET_UID" -g "$TARGET_GID" -m 644 \
+        "$OPENCODE_DEFAULTS" "$OPENCODE_CONFIG_FILE"
+elif jq -e '
+    type == "object"
+    and ((.watcher // {}) | type == "object")
+    and ((.watcher.ignore // []) | type == "array")
+' "$OPENCODE_CONFIG_FILE" >/dev/null 2>&1; then
+    OPENCODE_CONFIG_TEMP=$(mktemp "$OPENCODE_CONFIG_DIR/.opencode.json.XXXXXX")
+    jq --slurpfile defaults "$OPENCODE_DEFAULTS" '
+        .watcher.ignore = reduce (
+            ((.watcher.ignore // []) + $defaults[0].watcher.ignore)[]
+        ) as $pattern (
+            [];
+            if index($pattern) == null then . + [$pattern] else . end
+        )
+    ' "$OPENCODE_CONFIG_FILE" > "$OPENCODE_CONFIG_TEMP"
+    chown "$TARGET_UID:$TARGET_GID" "$OPENCODE_CONFIG_TEMP"
+    chmod --reference="$OPENCODE_CONFIG_FILE" "$OPENCODE_CONFIG_TEMP"
+    mv "$OPENCODE_CONFIG_TEMP" "$OPENCODE_CONFIG_FILE"
+    OPENCODE_CONFIG_TEMP=""
+else
+    echo "Warning: $OPENCODE_CONFIG_FILE is not a valid OpenCode JSON object; watcher defaults were not added." >&2
+fi
+
+echo "OpenCode watcher defaults ready."
+
 # Add host.docker.internal to /etc/hosts if not already present
 GATEWAY_IP=$(ip route | awk '/default/ {print $3}')
 if ! grep -q "host.docker.internal" /etc/hosts; then
