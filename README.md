@@ -11,6 +11,7 @@ The `cuybox.sh` script handles building the necessary Docker image, as well as c
 - **Unique & Predictable Naming**: Each container's name is generated from a tag (the folder's name or a custom one), a 4-character hash of the path, and an index to resolve collisions (`{tag}-{hash}-{index}`).
 - **Path Tracking**: A config file (`$XDG_CONFIG_HOME/cuybox/state.json`, defaulting to `~/.config/cuybox/state.json`) keeps a record of paths and their sandboxes to prevent collisions and manage indices.
 - **Pre-configured Environment**: The Docker image comes with `nvm` and the latest version of `Node.js v22` ready to use.
+- **Optional Tool Catalog**: Discover and explicitly install optional plugins and skills inside a sandbox with `cuybox-install`; optional tools are not baked into every container.
 - **Graceful Lifecycle**: Containers run under `tini` with an idle process so they stop quickly and cleanly even after long sessions.
 - **Custom Attach Program**: Sandboxes attach with `byobu` by default, with `--program` available for alternatives such as `bash`.
 - **Flexibility**: Allows passing custom options directly to the `docker run` command (e.g., to delete a container on exit with `--rm`).
@@ -94,6 +95,18 @@ The `cuybox.sh` script must be executable (`chmod +x cuybox.sh`).
     ./cuybox.sh --forget my-project-abcd-0
     ```
 
+10. **Install optional plugins or skills inside a sandbox**:
+    Run the catalog command from inside the sandbox. With no arguments it also
+    lists the available items.
+    ```bash
+    cuybox-install list
+    cuybox-install list plugins
+    cuybox-install list skills
+    cuybox-install install NAME
+    ```
+    Each item has its own installer script and is installed only when requested.
+    Re-running an installer updates or repairs that item.
+
 ## How It Works
 
 - **Dockerfile**: Defines an Ubuntu-based environment with `nvm`, Node.js v22, and `tini` as PID 1. The container idles with `tail -f /dev/null`, so stop and start operations remain fast.
@@ -105,6 +118,10 @@ The `cuybox.sh` script must be executable (`chmod +x cuybox.sh`).
     5.  Checks if the `develcuy/cuybox:latest` Docker image exists and, if not, builds it.
     6.  Creates the container on first run, runs the host-user setup once (or when `--setup-user` is passed), and then executes the attach program (`byobu` by default) inside the running container.
     7.  Provides state-only commands (`--list`, `--show`, and `--forget`) that operate on `state.json` without starting Docker setup.
+- **cuybox-install**: Discovers optional installer scripts under
+  `plugins/` and `skills/`, lists them by type, and runs only the item explicitly
+  requested by the sandbox user. Each executable installer must support
+  `--description` and be safe to run repeatedly.
 
 ## Customization
 
