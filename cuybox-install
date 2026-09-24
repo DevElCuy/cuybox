@@ -1,42 +1,24 @@
 #!/bin/bash
 set -euo pipefail
 
-CATALOG_DIR="${CUYBOX_CATALOG_DIR:-/usr/local/lib/cuybox}"
+CATALOG_DIR="${CUYBOX_CATALOG_DIR:-/usr/local/lib/cuybox/tools}"
 
 show_help() {
     cat <<'EOF'
-Usage: cuybox-install [list [TYPE]]
+Usage: cuybox-install [list]
        cuybox-install install NAME [ARGS...]
 
 List and install optional tools in the current cuybox sandbox.
 
 COMMANDS:
-  list [TYPE]            List all available installers, optionally filtered by
-                         "plugin" or "skill" (default when no command is given)
+  list                   List all available installers (default when no command is given)
   install NAME [ARGS...] Run the installer named NAME
-
-Names may be qualified with their type, for example:
-  cuybox-install install plugin/NAME
 EOF
 }
 
 error_exit() {
     echo "Error: $*" >&2
     exit 1
-}
-
-normalize_type() {
-    case "$1" in
-        plugin|plugins)
-            printf 'plugins\n'
-            ;;
-        skill|skills)
-            printf 'skills\n'
-            ;;
-        *)
-            return 1
-            ;;
-    esac
 }
 
 installer_description() {
@@ -51,86 +33,44 @@ installer_description() {
 }
 
 list_installers() {
-    local requested_type="${1:-}"
-    local normalized_type=""
-    local category category_dir installer name description count
+    local installer name description count
 
-    if [ -n "$requested_type" ]; then
-        if ! normalized_type=$(normalize_type "$requested_type"); then
-            error_exit "unknown installer type '$requested_type'. Expected 'plugin' or 'skill'."
-        fi
-    fi
-
-    printf '%-10s %-28s %s\n' "TYPE" "NAME" "DESCRIPTION"
+    printf '%-28s %s\n' "NAME" "DESCRIPTION"
     count=0
 
-    for category in plugins skills; do
-        if [ -n "$normalized_type" ] && [ "$category" != "$normalized_type" ]; then
-            continue
-        fi
-
-        category_dir="$CATALOG_DIR/$category"
-        [ -d "$category_dir" ] || continue
-
-        for installer in "$category_dir"/*.sh; do
+    if [ -d "$CATALOG_DIR" ]; then
+        for installer in "$CATALOG_DIR"/*.sh; do
             [ -f "$installer" ] || continue
             name=$(basename "$installer" .sh)
             description=$(installer_description "$installer")
-            printf '%-10s %-28s %s\n' "${category%s}" "$name" "$description"
+            printf '%-28s %s\n' "$name" "$description"
             count=$((count + 1))
         done
-    done
+    fi
 
     if [ "$count" -eq 0 ]; then
-        if [ -n "$requested_type" ]; then
-            echo "No $normalized_type are available."
-        else
-            echo "No optional installers are available."
-        fi
+        echo "No optional tool installers are available."
     fi
 }
 
 resolve_installer() {
     local requested_name="$1"
-    local qualified_type=""
-    local name="$requested_name"
-    local category candidate
-    local matches=()
+    local candidate
 
-    if [[ "$requested_name" == */* ]]; then
-        qualified_type=${requested_name%%/*}
-        name=${requested_name#*/}
-        if [[ "$name" == */* ]] || ! qualified_type=$(normalize_type "$qualified_type"); then
-            error_exit "invalid qualified installer name '$requested_name'. Use plugin/NAME or skill/NAME."
-        fi
-    fi
-
-    if [[ ! "$name" =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]*$ ]]; then
+    if [[ ! "$requested_name" =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]*$ ]]; then
         error_exit "invalid installer name '$requested_name'."
     fi
 
-    for category in plugins skills; do
-        if [ -n "$qualified_type" ] && [ "$category" != "$qualified_type" ]; then
-            continue
-        fi
-
-        candidate="$CATALOG_DIR/$category/$name.sh"
-        [ -f "$candidate" ] && matches+=("$candidate")
-    done
-
-    if [ "${#matches[@]}" -eq 0 ]; then
+    candidate="$CATALOG_DIR/$requested_name.sh"
+    if [ ! -f "$candidate" ]; then
         error_exit "no installer named '$requested_name'. Run 'cuybox-install list' to see available items."
     fi
 
-    if [ "${#matches[@]}" -gt 1 ]; then
-        error_exit "installer name '$requested_name' is ambiguous; qualify it as plugin/$name or skill/$name."
-    fi
-
-    if [ ! -x "${matches[0]}" ]; then
+    if [ ! -x "$candidate" ]; then
         error_exit "installer '$requested_name' is not executable."
     fi
 
-    printf '%s\n' "${matches[0]}"
+    printf '%s\n' "$candidate"
 }
 
 install_item() {
@@ -146,8 +86,8 @@ install_item() {
 case "${1:-list}" in
     list|--list|-l)
         shift || true
-        [ "$#" -le 1 ] || error_exit "list accepts at most one type."
-        list_installers "${1:-}"
+        [ "$#" -eq 0 ] || error_exit "list does not accept arguments."
+        list_installers
         ;;
     install)
         shift

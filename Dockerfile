@@ -24,10 +24,9 @@ EOF
 COPY setup-host-user.sh /usr/local/bin/setup-host-user.sh
 COPY opencode-defaults.json /usr/local/share/cuybox/opencode-defaults.json
 COPY cuybox-install /usr/local/bin/cuybox-install
-COPY plugins/ /usr/local/lib/cuybox/plugins/
-COPY skills/ /usr/local/lib/cuybox/skills/
+COPY tools/ /usr/local/lib/cuybox/tools/
 RUN chmod 755 /usr/local/bin/setup-host-user.sh /usr/local/bin/cuybox-install && \
-    find /usr/local/lib/cuybox/plugins /usr/local/lib/cuybox/skills \
+    find /usr/local/lib/cuybox/tools \
         -type f -name '*.sh' -exec chmod 755 {} +
 
 ENV TERM=xterm-256color

@@ -41,7 +41,7 @@ if ! command -v npm >/dev/null 2>&1; then
 fi
 
 if ! command -v npm >/dev/null 2>&1; then
-    echo "Error: npm is unavailable. Run cuybox user setup before installing this plugin." >&2
+    echo "Error: npm is unavailable. Run cuybox user setup before installing this tool." >&2
     exit 1
 fi
 

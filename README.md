@@ -12,7 +12,7 @@ The `cuybox.sh` script handles building the necessary Docker image, as well as c
 - **Path Tracking**: A config file (`$XDG_CONFIG_HOME/cuybox/state.json`, defaulting to `~/.config/cuybox/state.json`) keeps a record of paths and their sandboxes to prevent collisions and manage indices.
 - **Pre-configured Environment**: The Docker image comes with `nvm` and the latest version of `Node.js v22` ready to use.
 - **Quiet OpenCode Defaults**: OpenCode ignores common dependency trees, build outputs, caches, logs, binaries, and lockfiles from many language ecosystems when watching for filesystem changes.
-- **Optional Tool Catalog**: Discover and explicitly install optional plugins and skills inside a sandbox with `cuybox-install`; optional tools are not baked into every container.
+- **Optional Tool Catalog**: Discover and explicitly install optional tools inside a sandbox with `cuybox-install`; optional tools are not baked into every container.
 - **Graceful Lifecycle**: Containers run under `tini` with an idle process so they stop quickly and cleanly even after long sessions.
 - **Custom Attach Program**: Sandboxes attach with `byobu` by default, with `--program` available for alternatives such as `bash`.
 - **Flexibility**: Allows passing custom options directly to the `docker run` command (e.g., to delete a container on exit with `--rm`).
@@ -100,24 +100,19 @@ The `cuybox.sh` script must be executable (`chmod +x cuybox.sh`).
     ./cuybox.sh --forget my-project-abcd-0
     ```
 
-10. **Install optional plugins or skills inside a sandbox**:
+10. **Install optional tools inside a sandbox**:
     Run the catalog command from inside the sandbox. With no arguments it also
     lists the available items.
     ```bash
     cuybox-install list
-    cuybox-install list plugins
-    cuybox-install list skills
     cuybox-install install NAME
     cuybox-install install codebase-memory-mcp
-    cuybox-install install opencode-attention
     ```
     Each item has its own installer script and is installed only when requested.
     Re-running an installer updates or repairs that item. The
     `codebase-memory-mcp` installer installs the npm package for the current user
     and runs its agent configuration command; restart active coding-agent
-    sessions afterward. The `opencode-attention` installer fetches the plugin
-    from `DevElCuy/skills`, installs its compiled distribution for the current
-    user, and adds its entry point to the global OpenCode configuration.
+    sessions afterward.
 
 ## How It Works
 
@@ -132,7 +127,7 @@ The `cuybox.sh` script must be executable (`chmod +x cuybox.sh`).
     6.  Creates the container on first run, runs the host-user setup once (or when `--setup-user` is passed), and then executes the attach program (`byobu` by default) inside the running container.
     7.  Provides management commands (`--list`, `--list-all`, `--show`, and `--forget`) without starting sandbox setup. `--list` filters recorded entries using the current Docker state.
 - **cuybox-install**: Discovers optional installer scripts under
-  `plugins/` and `skills/`, lists them by type, and runs only the item explicitly
+  `tools/`, lists them, and runs only the item explicitly
   requested by the sandbox user. Each executable installer must support
   `--description` and be safe to run repeatedly.
 
