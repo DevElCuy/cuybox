@@ -18,7 +18,7 @@ The `cuybox.sh` script handles building the necessary Docker image, as well as c
 - **Flexibility**: Allows passing custom options directly to the `docker run` command (e.g., to delete a container on exit with `--rm`).
 - **Ephemeral Port Forwarding**: Run `--forward-port PORT`, `HOST_PORT:CONTAINER_PORT` (default bind `0.0.0.0`), or `BIND:HOST_PORT:CONTAINER_PORT`—and repeat the flag as needed—to spin up standalone `socat` bridges to a running sandbox until `Ctrl+C`.
 - **Discoverable Container IP**: The script prints the container IP on launch, so you can use it directly without running `--set-hostname` when you just need the address.
-- **State Management**: List entries in `state.json`, inspect one entry, or forget one entry from the state file without removing the Docker container.
+- **State Management**: List running containers, list every entry in `state.json`, inspect one entry, or forget one entry from the state file without removing the Docker container.
 
 ## Prerequisites
 
@@ -82,10 +82,14 @@ The `cuybox.sh` script must be executable (`chmod +x cuybox.sh`).
 8.  **Exit the sandbox**:
     Simply type `exit` or press `Ctrl+D`.
 
-9.  **Manage recorded sandbox state**:
-    List entries recorded in `state.json`. The listed `ID` is normally the generated container name (`tag-hash-index`), and the current working directory is marked when it matches an entry.
+9.  **List sandboxes and manage recorded state**:
+    List only running containers by their Docker name and project path. The current working directory is marked when it matches an entry.
     ```bash
     ./cuybox.sh --list
+    ```
+    List every entry recorded in `state.json`, including stopped or missing containers. The listed `ID` is normally the generated container name (`tag-hash-index`).
+    ```bash
+    ./cuybox.sh --list-all
     ```
     Show one entry by its listed ID:
     ```bash
@@ -126,7 +130,7 @@ The `cuybox.sh` script must be executable (`chmod +x cuybox.sh`).
     4.  Generates a unique and persistent name for the container.
     5.  Checks if the `develcuy/cuybox:latest` Docker image exists and, if not, builds it.
     6.  Creates the container on first run, runs the host-user setup once (or when `--setup-user` is passed), and then executes the attach program (`byobu` by default) inside the running container.
-    7.  Provides state-only commands (`--list`, `--show`, and `--forget`) that operate on `state.json` without starting Docker setup.
+    7.  Provides management commands (`--list`, `--list-all`, `--show`, and `--forget`) without starting sandbox setup. `--list` filters recorded entries using the current Docker state.
 - **cuybox-install**: Discovers optional installer scripts under
   `plugins/` and `skills/`, lists them by type, and runs only the item explicitly
   requested by the sandbox user. Each executable installer must support

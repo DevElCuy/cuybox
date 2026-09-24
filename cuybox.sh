@@ -26,6 +26,8 @@ show_help() {
     cat << 'EOF'
 Usage: cuybox.sh [OPTIONS] [TARGET_DIR] [CUSTOM_TAG]
        cuybox.sh --list
+       cuybox.sh --list-all
+       cuybox.sh --list-past [DAYS]
        cuybox.sh --show ID
        cuybox.sh --forget ID
 
@@ -42,8 +44,11 @@ OPTIONS:
   --set-hostname NAME Map hostname to container IP in /etc/hosts (requires sudo, exits without entering sandbox)
   --forward-port PORT|HOST_PORT:CONTAINER_PORT|BIND:HOST_PORT:CONTAINER_PORT
                        Run a standalone host->container port proxy (defaults to binding 0.0.0.0 and same host/container port when only PORT is given; repeat flag to add more mappings; requires running container and socat; Ctrl-C to stop)
-  --list              List sandbox entries recorded in state.json
-  --show ID           Show details for one state entry from --list
+  --list              List running sandbox containers by name and path
+  --list-all          List all sandbox entries recorded in state.json
+  --list-past [DAYS]  List up to 10 most recently active containers during the
+                       past DAYS days (default: 7), with recorded paths
+  --show ID           Show details for one state entry from --list-all
   --forget ID         Delete one state entry from state.json; does not remove the Docker container
   --delete ID         Alias for --forget
   -h, --help          Show this help message and exit
@@ -86,8 +91,11 @@ EXAMPLES:
   # Forward 127.0.0.1:9000 to container port 9000
   cuybox.sh --forward-port 127.0.0.1:9000:9000 /path/to/project
 
-  # List, inspect, and delete state entries
+  # List running containers, or all recorded state entries
   cuybox.sh --list
+  cuybox.sh --list-all
+  cuybox.sh --list-past       # Containers active during the last 7 days
+  cuybox.sh --list-past 30    # Containers active during the last 30 days
   cuybox.sh --show my-project-abcd-0
   cuybox.sh --forget my-project-abcd-0
 
@@ -264,7 +272,7 @@ resolve_state_entry_path() {
     done <<< "$matched_paths"
 
     if [ "${#matches[@]}" -eq 0 ]; then
-        error_exit "Error: no state entry found for identifier '$identifier'. Use --list to see valid IDs."
+        error_exit "Error: no state entry found for identifier '$identifier'. Use --list-all to see valid IDs."
     fi
 
     if [ "${#matches[@]}" -gt 1 ]; then
@@ -278,8 +286,12 @@ resolve_state_entry_path() {
     printf '%s\n' "${matches[0]}"
 }
 
-list_state_entries() {
+list_all_state_entries() {
     local count current_path
+    local raw_ids cid
+    local -A existing_containers=()
+    local docker_available=0
+
     if ! count=$(jq -r 'length' "$CONFIG_FILE"); then
         error_exit "Error: failed to read $CONFIG_FILE."
     fi
@@ -290,33 +302,207 @@ list_state_entries() {
         return 0
     fi
 
+    if command -v docker &> /dev/null; then
+        if raw_ids=$(docker ps --all --no-trunc --format '{{.ID}}' 2>/dev/null); then
+            docker_available=1
+            while IFS= read -r cid; do
+                [ -n "$cid" ] || continue
+                existing_containers["$cid"]=1
+                existing_containers["${cid:0:12}"]=1
+            done <<< "$raw_ids"
+        fi
+    fi
+
     printf '%-32s %-14s %s\n' "ID" "CONTAINER ID" "PATH"
-    jq -r '
-      to_entries
-      | sort_by(.key)
-      | .[]
-      | [
-          .key,
-          (.value.tag // ""),
-          (.value.hash // ""),
-          ((.value.index // -1) | tostring),
-          (.value.container_id // "")
-        ]
-      | @tsv
-    ' "$CONFIG_FILE" | while IFS=$'\t' read -r path tag hash index container_id; do
-        local id short_container_id marker
+    while IFS=$'\t' read -r path tag hash index container_id; do
+        local id short_container_id marker is_missing
         id=$(state_entry_id_from_values "$tag" "$hash" "$index" "$container_id" "$path")
         short_container_id="-"
         if [ -n "$container_id" ]; then
             short_container_id="${container_id:0:12}"
         fi
 
+        is_missing=0
+        if [ -z "$container_id" ]; then
+            is_missing=1
+        elif [ "$docker_available" -eq 1 ]; then
+            if [ -z "${existing_containers[$container_id]:-}" ] && [ -z "${existing_containers[${container_id:0:12}]:-}" ]; then
+                is_missing=1
+            fi
+        fi
+
+        marker=""
+        if [ "$is_missing" -eq 1 ]; then
+            marker=" ${COLOR_RED}(missing container)${COLOR_RESET}"
+        fi
+        if [ "$path" = "$current_path" ]; then
+            marker="${marker} ${COLOR_GREEN}(current folder)${COLOR_RESET}"
+        fi
+
+        printf '%-32s %-14s %s%s\n' "$id" "$short_container_id" "$path" "$marker"
+    done < <(
+        jq -r '
+          to_entries
+          | sort_by(.key)
+          | .[]
+          | [
+              .key,
+              (.value.tag // ""),
+              (.value.hash // ""),
+              ((.value.index // -1) | tostring),
+              (.value.container_id // "")
+            ]
+          | @tsv
+        ' "$CONFIG_FILE"
+    )
+}
+
+list_running_state_entries() {
+    local count current_path running_count
+    local path container_id docker_name marker
+    local running_containers running_container_id running_container_name
+
+    if ! command -v docker &> /dev/null; then
+        error_exit "Error: docker is not installed."
+    fi
+    if ! count=$(jq -r 'length' "$CONFIG_FILE"); then
+        error_exit "Error: failed to read $CONFIG_FILE."
+    fi
+    if [ "$count" -eq 0 ]; then
+        echo "No running cuybox containers."
+        return 0
+    fi
+
+    current_path=$(current_directory_path)
+    running_count=0
+
+    if ! running_containers=$(docker ps --no-trunc --format '{{.ID}}\t{{.Names}}'); then
+        error_exit "Error: failed to list running Docker containers."
+    fi
+
+    while IFS=$'\t' read -r path container_id; do
+        [ -n "$container_id" ] || continue
+
+        docker_name=""
+        while IFS=$'\t' read -r running_container_id running_container_name; do
+            if [ "$running_container_id" = "$container_id" ]; then
+                docker_name="$running_container_name"
+                break
+            fi
+        done <<< "$running_containers"
+        [ -n "$docker_name" ] || continue
+
+        if [ "$running_count" -eq 0 ]; then
+            printf '%-32s %s\n' "NAME" "PATH"
+        fi
+
         marker=""
         if [ "$path" = "$current_path" ]; then
             marker=" ${COLOR_GREEN}(current folder)${COLOR_RESET}"
         fi
+        printf '%-32s %s%s\n' "$docker_name" "$path" "$marker"
+        running_count=$((running_count + 1))
+    done < <(
+        jq -r '
+          to_entries
+          | sort_by(.key)
+          | .[]
+          | select((.value.container_id // "") != "")
+          | [.key, .value.container_id]
+          | @tsv
+        ' "$CONFIG_FILE"
+    )
 
-        printf '%-32s %-14s %s%s\n' "$id" "$short_container_id" "$path" "$marker"
+    if [ "$running_count" -eq 0 ]; then
+        echo "No running cuybox containers."
+    fi
+}
+
+list_past_state_entries() {
+    local cutoff_epoch current_path container_id_output docker_entries
+    local container_id container_name status started_at finished_at path
+    local latest_at latest_epoch marker active_now
+    local -a container_ids=()
+    local -a rows=()
+    declare -A paths_by_container_id=()
+
+    if ! command -v docker &> /dev/null; then
+        error_exit "Error: docker is not installed."
+    fi
+    if [[ ! "$PAST_DAYS" =~ ^[1-9][0-9]*$ ]]; then
+        error_exit "Error: --list-past days must be a positive integer."
+    fi
+    if ! cutoff_epoch=$(date -u --date="$PAST_DAYS days ago" +%s); then
+        error_exit "Error: failed to calculate the --list-past cutoff date."
+    fi
+
+    current_path=$(current_directory_path)
+    while IFS=$'\t' read -r path container_id; do
+        [ -n "$container_id" ] || continue
+        paths_by_container_id["$container_id"]="$path"
+    done < <(
+        jq -r '
+          to_entries[]
+          | select((.value.container_id // "") != "")
+          | [.key, .value.container_id]
+          | @tsv
+        ' "$CONFIG_FILE"
+    )
+
+    if ! container_id_output=$(docker ps --all --no-trunc --format '{{.ID}}'); then
+        error_exit "Error: failed to list Docker containers."
+    fi
+    if [ -z "$container_id_output" ]; then
+        echo "No Docker containers were active during the past $PAST_DAYS days."
+        return 0
+    fi
+    mapfile -t container_ids <<< "$container_id_output"
+
+    docker_entries=$(docker inspect --format '{{.Id}}	{{.Name}}	{{.State.Status}}	{{.State.StartedAt}}	{{.State.FinishedAt}}' "${container_ids[@]}" 2>/dev/null || true)
+    if [ -z "$docker_entries" ]; then
+        error_exit "Error: failed to inspect Docker container activity."
+    fi
+
+    while IFS=$'\t' read -r container_id container_name status started_at finished_at; do
+        [ -n "$container_id" ] || continue
+        [ "$started_at" != "0001-01-01T00:00:00Z" ] || continue
+
+        latest_at="$started_at"
+        if [ "$finished_at" != "0001-01-01T00:00:00Z" ] && [[ "$finished_at" > "$latest_at" ]]; then
+            latest_at="$finished_at"
+        fi
+        if ! latest_epoch=$(date --date="$latest_at" +%s 2>/dev/null); then
+            continue
+        fi
+        active_now=0
+        case "$status" in
+            running|paused|restarting)
+                active_now=1
+                ;;
+        esac
+        if [ "$active_now" -eq 0 ] && [ "$latest_epoch" -lt "$cutoff_epoch" ]; then
+            continue
+        fi
+
+        container_name="${container_name#/}"
+        path="${paths_by_container_id[$container_id]:--}"
+        rows+=("$latest_at"$'\t'"$container_name"$'\t'"${container_id:0:12}"$'\t'"$status"$'\t'"$path")
+    done <<< "$docker_entries"
+
+    if [ "${#rows[@]}" -eq 0 ]; then
+        echo "No Docker containers were active during the past $PAST_DAYS days."
+        return 0
+    fi
+
+    printf '%-32s %-14s %-9s %-25s %s\n' "NAME" "CONTAINER ID" "STATUS" "LAST ACTIVITY" "PATH"
+    printf '%s\n' "${rows[@]}" | LC_ALL=C sort -t $'\t' -k1,1r | head -n 10 | while IFS=$'\t' read -r latest_at container_name container_id status path; do
+        marker=""
+        if [ "$path" = "$current_path" ]; then
+            marker=" ${COLOR_GREEN}(current folder)${COLOR_RESET}"
+        fi
+        printf '%-32s %-14s %-9s %-25s %s%s\n' \
+            "$container_name" "$container_id" "$status" \
+            "$(date --date="$latest_at" '+%Y-%m-%d %H:%M:%S %z')" "$path" "$marker"
     done
 }
 
@@ -415,7 +601,13 @@ run_state_action() {
 
     case "$STATE_ACTION" in
         list)
-            list_state_entries
+            list_running_state_entries
+            ;;
+        list_all)
+            list_all_state_entries
+            ;;
+        list_past)
+            list_past_state_entries
             ;;
         show)
             show_state_entry "$STATE_IDENTIFIER"
@@ -485,6 +677,8 @@ parse_arguments() {
     EXPECT_FORWARD_PORT_VALUE=0
     EXPECT_PROGRAM_VALUE=0
     EXPECT_STATE_IDENTIFIER_FOR=""
+    EXPECT_PAST_DAYS_VALUE=0
+    PAST_DAYS=7
     FORCE_USER_SETUP=0
     RUN_AS_ROOT=0
     EXEC_COMMAND=(byobu)
@@ -496,6 +690,14 @@ parse_arguments() {
     AFTER_DASH_DASH=0
 
     for arg in "$@"; do
+        if [ "$EXPECT_PAST_DAYS_VALUE" -eq 1 ]; then
+            EXPECT_PAST_DAYS_VALUE=0
+            if [[ "$arg" =~ ^[0-9]+$ ]]; then
+                PAST_DAYS="$arg"
+                continue
+            fi
+        fi
+
         if [ -n "$EXPECT_STATE_IDENTIFIER_FOR" ]; then
             if [ -z "$arg" ]; then
                 error_exit "Error: --$EXPECT_STATE_IDENTIFIER_FOR requires a non-empty identifier."
@@ -536,6 +738,23 @@ parse_arguments() {
 
         if [ "$arg" = "--list" ]; then
             set_state_action "list"
+            continue
+        fi
+
+        if [ "$arg" = "--list-all" ]; then
+            set_state_action "list_all"
+            continue
+        fi
+
+        if [ "$arg" = "--list-past" ]; then
+            set_state_action "list_past"
+            EXPECT_PAST_DAYS_VALUE=1
+            continue
+        fi
+
+        if [[ "$arg" == --list-past=* ]]; then
+            PAST_DAYS="${arg#*=}"
+            set_state_action "list_past"
             continue
         fi
 
