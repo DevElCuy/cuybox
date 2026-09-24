@@ -664,12 +664,18 @@ resolve_target_details() {
         error_exit "Error: directory '$ABSOLUTE_PATH' does not exist." 1
     fi
 
-    # Scan upward to find .cuyboxrc (cuybox project root)
+    # Scan upward to find .cuybox or legacy .cuyboxrc (cuybox project root)
     CONTAINER_ROOT="$ABSOLUTE_PATH"
+    CONTAINER_ROOT_MARKER=""
     CURRENT="$ABSOLUTE_PATH"
     while [ "$CURRENT" != "/" ]; do
-        if [ -f "$CURRENT/.cuyboxrc" ]; then
+        if [ -f "$CURRENT/.cuybox" ]; then
             CONTAINER_ROOT="$CURRENT"
+            CONTAINER_ROOT_MARKER=".cuybox"
+            break
+        elif [ -f "$CURRENT/.cuyboxrc" ]; then
+            CONTAINER_ROOT="$CURRENT"
+            CONTAINER_ROOT_MARKER=".cuyboxrc"
             break
         fi
         CURRENT=$(dirname "$CURRENT")
@@ -922,7 +928,11 @@ run_forward_port_mode() {
     ensure_container_ready_for_forwarding
 
     if [ "$CONTAINER_ROOT" != "$ABSOLUTE_PATH" ]; then
-        echo "Container root: $CONTAINER_ROOT (via .cuyboxrc)"
+        local marker_suffix=""
+        if [ -n "$CONTAINER_ROOT_MARKER" ]; then
+            marker_suffix=" (via $CONTAINER_ROOT_MARKER)"
+        fi
+        echo "Container root: $CONTAINER_ROOT$marker_suffix"
         echo "Working directory: $ABSOLUTE_PATH"
     else
         echo "Container root: $CONTAINER_ROOT"
@@ -1038,20 +1048,10 @@ stage_setup() {
         refresh_container_name
     fi
 
-    # Create .cuyboxrc template if it doesn't exist
-    if [ ! -f "$CONTAINER_ROOT/.cuyboxrc" ]; then
-        cat > "$CONTAINER_ROOT/.cuyboxrc" <<'EOF'
-#!/bin/bash
-# cuybox setup script - runs as root during container setup
-# Available: $TARGET_UID, $TARGET_GID, $TARGET_USER
-
-# Example: Install packages and setup as target user
-# apt-get update && apt-get install -y postgresql-client
-# /sbin/setuser "$TARGET_USER" bash -l -c "npm install -g typescript"
-
-EOF
-        chmod +x "$CONTAINER_ROOT/.cuyboxrc"
-        echo "Created .cuyboxrc template at $CONTAINER_ROOT/.cuyboxrc"
+    # Create .cuybox placeholder if neither .cuybox nor legacy .cuyboxrc exists
+    if [ ! -f "$CONTAINER_ROOT/.cuybox" ] && [ ! -f "$CONTAINER_ROOT/.cuyboxrc" ]; then
+        touch "$CONTAINER_ROOT/.cuybox"
+        echo "Created .cuybox placeholder at $CONTAINER_ROOT/.cuybox"
     fi
 
     if [ "$container_created" -eq 1 ] || [ "$FORCE_USER_SETUP" -eq 1 ]; then
@@ -1074,7 +1074,11 @@ EOF
 
 stage_run() {
     if [ "$CONTAINER_ROOT" != "$ABSOLUTE_PATH" ]; then
-        echo "Container root: $CONTAINER_ROOT (via .cuyboxrc)"
+        local marker_suffix=""
+        if [ -n "$CONTAINER_ROOT_MARKER" ]; then
+            marker_suffix=" (via $CONTAINER_ROOT_MARKER)"
+        fi
+        echo "Container root: $CONTAINER_ROOT$marker_suffix"
         echo "Working directory: $ABSOLUTE_PATH"
     else
         echo "Container root: $CONTAINER_ROOT"
